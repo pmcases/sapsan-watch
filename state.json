@@ -2,5 +2,6 @@
  "best": {},
  "history": [],
  "last_digest": "",
- "last_alert": {}
+ "last_alert": {},
+ "fail_streak": 1
 }
