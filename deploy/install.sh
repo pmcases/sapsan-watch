@@ -38,6 +38,7 @@ PRICE_CEILING=30000
 WANTED_CLASSES=
 DAILY_DIGEST_HOUR=10
 STATE_PATH=$APP_DIR/state.json
+RZD_CA_BUNDLE=$APP_DIR/certs
 EOF
   chmod 600 "$APP_DIR/.env"
   echo "  сохранил в $APP_DIR/.env"
@@ -46,6 +47,28 @@ else
 fi
 
 # ─────────── проверка связи ───────────
+# ─────────── российские корневые сертификаты ───────────
+mkdir -p "$APP_DIR/certs"
+if ! ls "$APP_DIR/certs"/*.cer "$APP_DIR/certs"/*.pem "$APP_DIR/certs"/*.crt >/dev/null 2>&1; then
+  cat <<TXT
+
+  !! В $APP_DIR/certs пусто.
+
+  Сайты РЖД работают на российском корневом сертификате (НУЦ Минцифры),
+  которого нет ни в Python, ни в системном хранилище Ubuntu. Без него
+  скрипт упрётся в CERTIFICATE_VERIFY_FAILED.
+
+  Скачай сертификаты с https://www.gosuslugi.ru/crt и положи их сюда,
+  например со своего компьютера:
+
+      scp ~/Downloads/russian_trusted_*.cer root@ЭТОТ_СЕРВЕР:$APP_DIR/certs/
+
+  Доверие к ним действует только внутри скрипта и только для rzd.ru —
+  в системное хранилище они не попадают.
+
+TXT
+fi
+
 echo
 echo "==> проверяем, что с этой машины всё видно"
 UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
