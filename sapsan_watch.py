@@ -19,6 +19,7 @@ import os
 import pathlib
 import random
 import re
+import ssl
 import sys
 import time
 import urllib.error
@@ -58,6 +59,13 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 STATE_PATH = pathlib.Path(os.getenv("STATE_PATH", "state.json"))
 DEBUG = os.getenv("DEBUG", "") not in ("", "0", "false")
 
+# Сайты РЖД живут на российском корневом сертификате (НУЦ Минцифры),
+# которого нет ни в Python, ни в системных хранилищах за пределами России.
+# Сюда — путь к скачанным с gosuslugi.ru/crt сертификатам: файл, несколько
+# файлов через запятую или папка с ними. Доверие распространяется ТОЛЬКО
+# на соединения с РЖД: Telegram и всё остальное ходят через обычное хранилище.
+RZD_CA_BUNDLE = os.getenv("RZD_CA_BUNDLE", "")
+
 BUY_URL = "https://ticket.rzd.ru/searchresults/v/1/{a}/{b}/{d}".format(
     a=FROM_CODE, b=TO_CODE, d="-".join(reversed(TRIP_DATE.split(".")))
 )
@@ -77,8 +85,50 @@ def log(*a):
 
 # ────────────────────────────── HTTP ──────────────────────────────
 
+def _collect_ca_files(spec: str) -> list[pathlib.Path]:
+    files: list[pathlib.Path] = []
+    for part in spec.split(","):
+        p = pathlib.Path(part.strip()).expanduser()
+        if not part.strip():
+            continue
+        if p.is_dir():
+            files += sorted(x for x in p.iterdir() if x.suffix.lower() in (".cer", ".crt", ".pem", ".der"))
+        elif p.is_file():
+            files.append(p)
+        else:
+            log(f"!! сертификат не найден: {p}")
+    return files
+
+
+def _build_rzd_context() -> ssl.SSLContext:
+    """Обычная проверка сертификатов плюс российский корневой — только для РЖД."""
+    ctx = ssl.create_default_context()
+    if not RZD_CA_BUNDLE:
+        return ctx
+
+    pem_parts = []
+    for f in _collect_ca_files(RZD_CA_BUNDLE):
+        raw = f.read_bytes()
+        try:
+            # .cer с Госуслуг обычно в двоичном DER — приводим к PEM
+            text = raw.decode("ascii") if b"-----BEGIN" in raw else ssl.DER_cert_to_PEM_cert(raw)
+            if "BEGIN CERTIFICATE" not in text:
+                continue  # приватные ключи и прочий мусор в папке пропускаем
+            pem_parts.append(text.strip())
+            log(f"   доверяем сертификату {f.name} (только для rzd.ru)")
+        except Exception as e:  # noqa: BLE001
+            log(f"!! не смог прочитать {f.name}: {e}")
+
+    if pem_parts:
+        ctx.load_verify_locations(cadata="\n".join(pem_parts) + "\n")
+    return ctx
+
+
 _cookies = http.cookiejar.CookieJar()
-_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookies))
+_opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(_cookies),
+    urllib.request.HTTPSHandler(context=_build_rzd_context()),
+)
 
 
 def _get(url: str, timeout: int = 30) -> str:
@@ -312,6 +362,14 @@ def main() -> int:
         trains = fetch_trains()
     except Exception as e:  # noqa: BLE001
         log("!! не смогли получить выдачу:", e)
+        if "CERTIFICATE_VERIFY_FAILED" in str(e):
+            log("")
+            log("   Это российский корневой сертификат, которого нет в хранилище Python.")
+            log("   Скачай сертификаты с https://www.gosuslugi.ru/crt и укажи путь:")
+            log("      RZD_CA_BUNDLE=~/Downloads/russian_trusted_root_ca.cer")
+            log("   Можно передать несколько файлов через запятую или папку целиком.")
+            log("   Доверие будет действовать только для rzd.ru.")
+            log("")
         # молча не глотаем: если РЖД недоступен несколько часов подряд, надо знать
         fails = st.get("fail_streak", 0) + 1
         st["fail_streak"] = fails
