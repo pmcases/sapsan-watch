@@ -1,0 +1,28 @@
+name: probe
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Кто вообще отвечает снаружи
+        run: |
+          for h in \
+            "https://pass.rzd.ru/timetable/public/ru?layer_id=5827&dir=0&tfl=3&checkSeats=1&code0=2000000&code1=2004000&dt0=20.09.2026" \
+            "https://ticket.rzd.ru/" \
+            "https://www.rzd.ru/" \
+            "https://www.tutu.ru/poezda/" \
+            "https://travel.yandex.ru/" \
+            "https://rasp.yandex.ru/" \
+            "https://www.grandtrain.ru/" \
+            "https://poezd.ru/" \
+            "https://www.ufs-online.ru/" \
+            "https://tutu.ru/" ; do
+            code=$(curl -s -o /tmp/b -w "%{http_code}" --max-time 12 \
+              -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36" \
+              -H "Accept-Language: ru-RU,ru;q=0.9" "$h" || echo TIMEOUT)
+            size=$(wc -c < /tmp/b 2>/dev/null || echo 0)
+            host=$(echo "$h" | cut -d/ -f3)
+            echo "RESULT $host -> $code (${size}b)"
+          done
